@@ -10,7 +10,7 @@ use glium::texture::Texture2d;
 use glium::backend::Facade;
 use glium::backend::glutin_backend::GlutinFacade;
 
-pub use rusttype::{Scale, point, Point, vector, Vector, Rect};
+pub use rusttype::{Scale, point, Point, vector, Vector, Rect, SharedBytes};
 use rusttype::{Font, FontCollection, PositionedGlyph, Glyph};
 use rusttype::gpu_cache::*;
 
@@ -41,7 +41,9 @@ impl<'a> Render<'a> {
         ret
     }
 
-    pub fn add_fonts(&mut self, bytes: &'a [u8]) {
+    pub fn add_fonts<B>(&mut self, bytes: B)
+    where B: Into<SharedBytes<'a>>,
+    {
         let fonts = FontCollection::from_bytes(bytes);
         self.fonts.extend(fonts.into_fonts());
     }

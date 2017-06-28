@@ -35,7 +35,7 @@ fn main() {
         .unwrap();
 
     let mut font = rusttyper::Render::new(&display);
-    font.add_fonts(include_bytes!("../DroidSans.ttf"));
+    font.add_fonts(&include_bytes!("../DroidSans.ttf")[..]);
 
     let uidraw = rusttyper::simple2d::Simple2d::create(&display).unwrap();
     let mut count = 0usize;

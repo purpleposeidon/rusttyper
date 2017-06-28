@@ -1,0 +1,9 @@
+[package]
+name = "rusttyper"
+version = "0.1.0"
+authors = ["neptunepink <purpleposeidon@gmail.com>"]
+
+[dependencies]
+rusttype = "^0.2.1"
+glium = "^0.14"
+unicode-normalization = "^0.1.2"

@@ -215,7 +215,7 @@ where
         }
     }
 
-    pub fn write<S>(&mut self, pos: P, text: S, width: u32)
+    pub fn write<S>(&mut self, pos: P, width: u32, text: S)
     where S: Into<Cow<'text, str>>
     {
         self.push(Text {

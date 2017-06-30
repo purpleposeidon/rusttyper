@@ -81,7 +81,7 @@ fn main() {
                 (s, "?".into()),
                 (c, " (okay that might be too big)".into()),
             ].into_iter());
-            buffer.write((0, screen_height as i32), format!("{}", count), input_field_width);
+            buffer.write((0, screen_height as i32), input_field_width, format!("{}", count));
         }
 
         let mut target = display.draw();

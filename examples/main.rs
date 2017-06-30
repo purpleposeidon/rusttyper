@@ -63,11 +63,23 @@ fn main() {
                 color: (m(5), m(16), m(32), 255),
                 .. s
             };
+            let b = Style {
+                scale: 32.0,
+                .. s
+            };
+            let c = Style {
+                scale: 10.0,
+                .. s
+            };
             buffer.push_run(start, input_field_width as i32, vec![
                 (s, TEXT.into()),
                 (s, "\n...Did I mention that we have ".into()),
                 (r, "COLORS".into()),
                 (s, "?".into()),
+                (s, "\nAnd also ".into()),
+                (b, "FONT SIZES".into()),
+                (s, "?".into()),
+                (c, " (okay that might be too big)".into()),
             ].into_iter());
             buffer.write((0, screen_height as i32), format!("{}", count), input_field_width);
         }

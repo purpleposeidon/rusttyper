@@ -93,9 +93,9 @@ pub enum Run<P> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
-    /// NYI
+    /// The size of the font. The default scale is 16.0.
     pub scale: f32,
-    /// NYI
+    /// RGBA color components, from 0 to 255.
     pub color: (u8, u8, u8, u8),
     /// NYI
     pub fontid: usize,

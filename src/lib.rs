@@ -4,14 +4,13 @@ extern crate unicode_normalization;
 extern crate rusttype;
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 
 use glium::texture::Texture2d;
 use glium::backend::Facade;
 use glium::backend::glutin_backend::GlutinFacade;
 
 pub use rusttype::{Scale, point, Point, vector, Vector, Rect, SharedBytes};
-use rusttype::{Font, FontCollection, PositionedGlyph, Glyph};
+use rusttype::{Font, FontCollection, PositionedGlyph, Glyph, GlyphId};
 use rusttype::gpu_cache::*;
 
 
@@ -59,50 +58,173 @@ impl<'a> Render<'a> {
     }
 }
 
-// type UiText<'a> = Text<'a, (i32, i32)>;
-pub struct Text<'a, P> {
-    /// Where this text is located in space. In 2D applications, `(i32, i32)` is quite sufficient.
-    /// 3D applications will likely need some point3, orientation, `right`, and `down`.
-    pub pos: P,
-    pub width: u32,
-    pub text: Cow<'a, str>,
+pub struct Text<'a, P: Clone> {
+    /// Either this is the first part of a text run, or it continues a previous text run,
+    /// likely with a different `Style`.
+    pub at: Run<P>,
     pub style: Style,
+    pub text: Cow<'a, str>,
 }
-
-#[derive(Debug, Clone, Copy)]
-pub enum Style {
-    Normal,
-    // FIXME: This is incomplete.
-}
-impl Style {
-    fn get_scale(self, render: &Render) -> Scale {
-        Scale::uniform(16.0 * render.hidpi_factor)
+impl<'a, P> Text<'a, P>
+where P: Clone
+{
+    fn new_layout(&self) -> LayoutBlock<P> {
+        if let Run::Head { ref pos, width } = self.at {
+            LayoutBlock::new(pos.clone(), width as i32)
+        } else {
+            panic!("not a head");
+        }
     }
 }
 
-pub struct Buffer<'a, P> {
-    parts: Vec<Text<'a, P>>,
+#[derive(Clone)]
+pub enum Run<P> {
+    /// Defines where, and how large.
+    Head {
+        /// Where this text is located in space. In 2D applications, `(i32, i32)` is quite sufficient.
+        /// 3D applications will likely need some point3, orientation, `right`, and `down`.
+        pos: P,
+        /// How much space the text run can use.
+        width: u32,
+    },
+    /// This is a continuation of a previous `Text` object with a different style.
+    Tail,
 }
-impl<'a, P> Buffer<'a, P>
-where P: 'a,
+
+#[derive(Debug, Clone, Copy)]
+pub struct Style {
+    /// NYI
+    pub scale: f32,
+    /// NYI
+    pub color: (u8, u8, u8, u8),
+    /// NYI
+    pub fontid: usize,
+
+    /// NYI
+    pub bold: bool,
+    /// NYI
+    pub italic: bool,
+    /// NYI
+    pub underline: bool,
+    /// NYI
+    pub strike: bool,
+}
+impl Default for Style {
+    fn default() -> Self {
+        Style {
+            scale: 16.0,
+            color: (0, 0, 0, 0xFF),
+            fontid: 0,
+
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+        }
+    }
+}
+impl Style {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl Style {
+    fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> Option<(usize, Glyph<'fonts>)>
+        where 'context: 'fonts
+    {
+        // FIXME: Try fallback fonts.
+        // FIXME: How do we figure out who the bold fonts are?
+        let font = &fonts[self.fontid];
+        font.glyph(c).map(|g| (self.fontid, g))
+    }
+}
+
+pub enum FlowControl {
+    Enter,
+    Continue,
+    Break,
+}
+
+struct LayoutBlock<P: Clone> {
+    origin: P,
+    width: i32,
+    caret: Point<f32>,
+    unit_start: usize,
+    any_break: bool,
+    max_area: Point<f32>,
+    last_glyph_id: Option<GlyphId>,
+}
+impl<P: Clone> LayoutBlock<P> {
+    fn new(origin: P, width: i32) -> Self {
+        LayoutBlock {
+            origin: origin,
+            width: width,
+            caret: point(0.0, 0.0),
+            unit_start: 0,
+            any_break: false,
+            max_area: point(0.0, 0.0),
+            last_glyph_id: None,
+        }
+    }
+
+    fn bump_line(&mut self, advance_height: f32) {
+        if self.caret.x > self.max_area.x { self.max_area.x = self.caret.x; }
+        self.caret = point(0.0, self.caret.y + advance_height);
+        self.max_area.y = self.caret.y;
+    }
+}
+
+pub struct Buffer<'text, P: Clone> {
+    parts: Vec<Text<'text, P>>,
+}
+impl<'text, P> Buffer<'text, P>
+where
+    P: Clone,
+    P: 'text,
 {
     pub fn new() -> Self {
         Buffer {
             parts: Vec::new(),
         }
     }
-    pub fn push(&mut self, t: Text<'a, P>) {
+
+    pub fn push(&mut self, t: Text<'text, P>) {
         self.parts.push(t);
     }
 
+    pub fn push_run<I>(&mut self, start: P, width: i32, mut run: I)
+    where
+        I: Iterator<Item=(Style, Cow<'text, str>)>,
+    {
+        if let Some(t) = run.next() {
+            self.push(Text {
+                at: Run::Head {
+                    pos: start,
+                    width: width as u32,
+                },
+                style: t.0,
+                text: t.1,
+            });
+        }
+        for t in run {
+            self.push(Text {
+                at: Run::Tail,
+                style: t.0,
+                text: t.1,
+            });
+        }
+    }
+
     pub fn write<S>(&mut self, pos: P, text: S, width: u32)
-    where S: Into<Cow<'a, str>>
+    where S: Into<Cow<'text, str>>
     {
         self.push(Text {
-            pos: pos,
-            width: width,
+            at: Run::Head {
+                pos: pos,
+                width: width
+            },
             text: text.into(),
-            style: Style::Normal,
+            style: Style::default(),
         });
     }
 
@@ -111,23 +233,28 @@ where P: 'a,
     }
 
     /// You're in charge of building the vertex buffer.
-    pub fn build<'b, F>(&mut self, render: &mut Render, mut f: F)
+    pub fn build<'fonts, F>(
+        &mut self,
+        render: &'fonts mut Render,
+        mut write_glyph: F
+    )
     where
-        F: for<'x, 'y> FnMut(&'x Text<'y, P>, Rect<i32>, Rect<f32>),
+        F: for<'x, 'y> FnMut(&'x Text<'y, P>, &P, Rect<i32>, Rect<f32>),
     {
-        let fonts = &render.fonts;
-        let mut glyphs = &mut Vec::new();
+        let mut layout = match self.parts.first() {
+            None => return,
+            Some(l) => l.new_layout(),
+        };
+        let mut glyphs = Vec::new();
         for text in &self.parts {
-            let scale = text.style.get_scale(render);
-            let fontid = 0; // FIXME: Font selection
-            Self::layout_paragraph(
-                glyphs,
-                fonts,
-                scale,
-                text.width as i32,
-                text.text.as_ref(),
+            layout_paragraph(
+                &mut layout,
+                &mut glyphs,
+                render.hidpi_factor,
+                &render.fonts,
+                text,
             );
-            for glyph in glyphs.iter() {
+            for &(fontid, ref glyph) in &glyphs {
                 render.cache.queue_glyph(fontid, glyph.clone());
             }
             let texture = &mut render.texture;
@@ -144,103 +271,90 @@ where P: 'a,
                     format: glium::texture::ClientFormat::U8,
                 });
             }).unwrap();
-            for glyph in glyphs.iter() {
+            for &(fontid, ref glyph) in &glyphs {
                 if let Ok(Some((uv, pos))) = render.cache.rect_for(fontid, glyph) {
-                    f(text, pos, uv);
+                    write_glyph(text, &layout.origin, pos, uv);
                 }
             }
 
             glyphs.clear();
         }
     }
-
-    fn layout_paragraph<'f, 'r>(
-        result: &'r mut Vec<PositionedGlyph<'f>>,
-        fonts: &'f Vec<Font<'f>>,
-        scale: Scale,
-        width: i32,
-        text: &str,
-    ) -> Point<f32>
-    where 'f: 'r
-    {
-        use self::unicode_normalization::UnicodeNormalization;
-        let v_metrics = fonts[0].v_metrics(scale);
-        let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-        let max_area = RefCell::new(point(0.0, 0.0));
-        let caret = RefCell::new(point(0.0, v_metrics.ascent));
-        let replacement_char = get_glyph('�', fonts).or_else(|| get_glyph('?', fonts));
-        let mut unit_start = 0;
-        let mut any_break = false;
-        let bump_line = || {
-            let mut max_area = max_area.borrow_mut();
-            let mut caret = caret.borrow_mut();
-            if caret.x > max_area.x { max_area.x = caret.x; }
-            *caret = point(0.0, caret.y + advance_height);
-            max_area.y = caret.y;
-        };
-        let is_separator = |c: char| {
-            c == ' '
-        };
-        let mut last_glyph_id = None;
-        for c in text.nfc() {
-            if c.is_control() {
-                if c == '\n' {
-                    bump_line();
-                    unit_start = result.len();
-                    any_break = false;
-                }
-                continue;
-            }
-            if is_separator(c) {
-                unit_start = result.len() + 1; // We break at the *next* character
-                any_break = true;
-            }
-            let (font, base_glyph) = match get_glyph(c, fonts).or_else(|| replacement_char.clone()) {
-                Some((font, glyph)) => (font, glyph),
-                None => continue,
-            };
-            if let Some(id) = last_glyph_id.take() {
-                caret.borrow_mut().x += font.pair_kerning(scale, id, base_glyph.id());
-            }
-            last_glyph_id = Some(base_glyph.id());
-            let mut glyph: PositionedGlyph = base_glyph.scaled(scale).positioned(*caret.borrow());
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                if bb.max.x > width {
-                    bump_line();
-                    if result.len() > unit_start && any_break {
-                        // There's probably some weird degenerate case where this'd panic w/o this
-                        // check.
-                        let mut caret = caret.borrow_mut();
-                        let delta = *caret - result[unit_start].position();
-                        for g in &mut result[unit_start..] {
-                            *g = g.clone().into_unpositioned().positioned(g.position() + delta);
-                        }
-                        let last = result.last().expect("any glyphs");
-                        *caret = last.position();
-                        caret.x += last.unpositioned().h_metrics().advance_width;
-                        any_break = false;
-                    }
-                    glyph = glyph.into_unpositioned().positioned(*caret.borrow());
-                    last_glyph_id = None;
-                }
-            }
-            caret.borrow_mut().x += glyph.unpositioned().h_metrics().advance_width;
-            result.push(glyph);
-        }
-        let ret = max_area.borrow().clone();
-        ret
-    }
-
 }
-
-
-fn get_glyph<'a, 'f>(c: char, fonts: &'f Vec<Font<'f>>) -> Option<(&'f Font<'a>, Glyph<'f>)>
-where 'f: 'a
+fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text, P>(
+    layout: &'layout mut LayoutBlock<P>,
+    result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
+    dpi: f32,
+    fonts: &'context Vec<Font<'fonts>>,
+    text: &'text Text<P>,
+) -> Point<f32>
+where
+    'context: 'fonts,
+    P: Clone,
 {
-    // FIXME: Try fallback fonts.
-    let font = &fonts[0];
-    font.glyph(c).map(|g| (font, g))
+    match text.at {
+        Run::Head { ref pos, width } => {
+            *layout = LayoutBlock::new(pos.clone(), width as i32);
+        },
+        _ => {},
+    }
+    let style = &text.style;
+    let scale = Scale::uniform(text.style.scale * dpi);
+    let v_metrics = fonts[0].v_metrics(scale);
+    let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
+    let replacement_char = style.get_glyph('�', fonts).or_else(|| style.get_glyph('?', fonts));
+    let is_separator = |c: char| {
+        c == ' '
+    };
+    use self::unicode_normalization::UnicodeNormalization;
+    for c in text.text.nfc() {
+        if c.is_control() {
+            if c == '\n' {
+                layout.bump_line(advance_height);
+                layout.unit_start = result.len();
+                layout.any_break = false;
+            }
+            continue;
+        }
+        if is_separator(c) {
+            layout.unit_start = result.len() + 1; // We break at the *next* character
+            layout.any_break = true;
+        }
+        let (fontid, base_glyph) = match style.get_glyph(c, fonts).or_else(|| replacement_char.clone()) {
+            Some((fontid, glyph)) => (fontid, glyph),
+            None => continue,
+        };
+        let font = &fonts[fontid];
+        if let Some(id) = layout.last_glyph_id.take() {
+            layout.caret.x += font.pair_kerning(scale, id, base_glyph.id());
+        }
+        layout.last_glyph_id = Some(base_glyph.id());
+        let mut glyph: PositionedGlyph = base_glyph.scaled(scale).positioned(layout.caret);
+        if let Some(bb) = glyph.pixel_bounding_box() {
+            if bb.max.x > layout.width {
+                layout.bump_line(advance_height);
+                if result.len() > layout.unit_start && layout.any_break {
+                    // There's probably some weird degenerate case where this'd panic w/o this
+                    // check.
+                    let delta = layout.caret - result[layout.unit_start].1.position();
+                    for &mut (_, ref mut g) in &mut result[layout.unit_start..] {
+                        *g = g.clone().into_unpositioned().positioned(g.position() + delta);
+                    }
+                    let ref last = result.last().expect("any glyphs").1;
+                    layout.caret = last.position();
+                    layout.caret.x += last.unpositioned().h_metrics().advance_width;
+                    layout.any_break = false;
+                }
+                glyph = glyph.into_unpositioned().positioned(layout.caret);
+                layout.last_glyph_id = None;
+            }
+        }
+        layout.caret.x += glyph.unpositioned().h_metrics().advance_width;
+        result.push((fontid, glyph));
+    }
+    layout.max_area.clone()
 }
+
 
 pub mod simple2d {
     use super::*;
@@ -305,10 +419,14 @@ pub mod simple2d {
         {
             let (screen_width, screen_height) = target.get_dimensions();
             let (screen_width, screen_height) = (screen_width as f32, screen_height as f32);
-            let color = [0.0, 0.0, 0.0, 1.0];
             let mut vertices = Vec::new();
-            buffer.build(font, |text, pos_rect, uv_rect| {
-                let origin = vector(text.pos.0, text.pos.1);
+            buffer.build(font, |text, origin, pos_rect, uv_rect| {
+                let color = {
+                    let c = text.style.color;
+                    let f = |c| c as f32 / 255.0;
+                    [f(c.0), f(c.1), f(c.2), f(c.3)]
+                };
+                let origin = vector(origin.0, origin.1);
                 let (gl_rect_min, gl_rect_max) = (
                     2.0 * vector(
                         (pos_rect.min.x + origin.x) as f32 / screen_width - 0.5,

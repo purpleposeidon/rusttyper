@@ -55,8 +55,21 @@ fn main() {
             let (screen_width, screen_height) = (screen_width as f32, screen_height as f32);
             let margin = 0.1;
             let input_field_width = (screen_width - 2.0 * margin * screen_width) as u32;
-            buffer.write(((screen_width * margin) as i32, (screen_height * margin) as i32), TEXT, input_field_width);
-            buffer.write((0, 0), format!("{}", count), input_field_width);
+            let start = ((screen_width * margin) as i32, (screen_height * margin) as i32);
+            use rusttyper::Style;
+            let s = Style::default();
+            let m = |n| (count * n % 255) as u8;
+            let r = Style {
+                color: (m(5), m(16), m(32), 255),
+                .. s
+            };
+            buffer.push_run(start, input_field_width as i32, vec![
+                (s, TEXT.into()),
+                (s, "\n...Did I mention that we have ".into()),
+                (r, "COLORS".into()),
+                (s, "?".into()),
+            ].into_iter());
+            buffer.write((0, screen_height as i32), format!("{}", count), input_field_width);
         }
 
         let mut target = display.draw();

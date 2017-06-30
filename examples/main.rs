@@ -71,7 +71,7 @@ fn main() {
                 scale: 10.0,
                 .. s
             };
-            buffer.push_run(start, input_field_width as i32, vec![
+            buffer.push_run(start, input_field_width, vec![
                 (s, TEXT.into()),
                 (s, "\n...Did I mention that we have ".into()),
                 (r, "COLORS".into()),

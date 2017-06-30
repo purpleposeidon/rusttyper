@@ -198,7 +198,7 @@ where
         self.parts.push(t);
     }
 
-    pub fn push_run<I>(&mut self, start: P, width: i32, mut run: I)
+    pub fn push_run<I>(&mut self, start: P, width: u32, mut run: I)
     where
         I: Iterator<Item=(Style, Cow<'text, str>)>,
     {

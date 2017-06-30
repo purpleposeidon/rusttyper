@@ -31,7 +31,13 @@ impl<'a> Render<'a> {
 
         let mut ret = Render {
             fonts: Vec::new(),
-            texture: Texture2d::empty(gl, initial_size as u32, initial_size as u32).unwrap(),
+            texture: Texture2d::empty_with_format(
+                gl,
+                glium::texture::UncompressedFloatFormat::U8,
+                glium::texture::MipmapsOption::NoMipmap,
+                initial_size as u32,
+                initial_size as u32
+            ).unwrap(),
             cache: Cache::new(0, 0, tolerance.0, tolerance.1),
             hidpi_factor: dpi, // FIXME: ask window + may need updating?
             tolerance: tolerance,

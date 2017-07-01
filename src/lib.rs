@@ -156,9 +156,8 @@ pub struct Layout<P> {
     pub width: u32,
 }
 impl<P> Layout<P> {
-    fn to_block<'a>(&'a self) -> LayoutBlock<'a, P> {
+    fn to_block(&self) -> LayoutBlock {
         LayoutBlock {
-            origin: &self.origin,
             width: self.width,
             caret: point(0.0, 0.0),
             unit_start: 0,
@@ -169,10 +168,7 @@ impl<P> Layout<P> {
     }
 }
 
-struct LayoutBlock<'a, P>
-where P: 'a
-{
-    origin: &'a P,
+struct LayoutBlock {
     width: u32,
     caret: Point<f32>,
     unit_start: usize,
@@ -180,7 +176,7 @@ where P: 'a
     max_area: Point<f32>,
     last_glyph_id: Option<GlyphId>,
 }
-impl<'a, P> LayoutBlock<'a, P> {
+impl LayoutBlock {
     fn bump_line(&mut self, advance_height: f32) {
         if self.caret.x > self.max_area.x { self.max_area.x = self.caret.x; }
         self.caret = point(0.0, self.caret.y + advance_height);
@@ -307,8 +303,8 @@ where
         }
     }
 }
-fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text, P>(
-    layout: &'layout mut LayoutBlock<P>,
+fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text>(
+    layout: &'layout mut LayoutBlock,
     result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
     dpi: f32,
     fonts: &'context Vec<Font<'fonts>>,

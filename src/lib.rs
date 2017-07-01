@@ -257,8 +257,6 @@ where
     where
         F: for<'x, 'y> FnMut(&'x Text<'y>, &P, Rect<i32>, Rect<f32>) -> FlowControl,
     {
-        use std::collections::HashSet;
-        //let mut unique_glyphs = HashSet::new();
         let mut glyphs = Vec::new();
         let mut glyph_run: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
         for &(ref range, ref layout) in &self.runs {
@@ -280,6 +278,9 @@ where
             render.cache.queue_glyph(fontid, glyph.clone());
         }
         let texture = &mut render.texture;
+        // I think this is O(total # of glyphs) rather than O(total # of unique glyphs), but the
+        // two numbers were actually fairly similar. (There are extra variants due to sub-pixel
+        // positioning?)
         render.cache.cache_queued(|rect, data| {
             texture.main_level().write(glium::Rect {
                 left: rect.min.x,

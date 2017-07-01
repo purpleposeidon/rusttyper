@@ -4,6 +4,7 @@ extern crate unicode_normalization;
 extern crate rusttype;
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use glium::texture::Texture2d;
 use glium::backend::Facade;
@@ -23,11 +24,11 @@ pub struct Render<'a> {
     tolerance: (f32, f32),
 }
 impl<'a> Render<'a> {
-    pub fn new(gl: &GlutinFacade) -> Self {
+    /// texture_size: 512, tolerance: (0.1, 0.1)
+    pub fn new(gl: &GlutinFacade, texture_size: u32, tolerance: (f32, f32)) -> Self {
         let dpi = gl.get_window().unwrap().hidpi_factor();
         // We can always just resize it if it's too small.
-        let initial_size = 512.0 * dpi;
-        let tolerance = (0.1, 0.1);
+        let initial_size = (texture_size as f32 * dpi) as u32;
 
         let mut ret = Render {
             fonts: Vec::new(),
@@ -35,8 +36,8 @@ impl<'a> Render<'a> {
                 gl,
                 glium::texture::UncompressedFloatFormat::U8,
                 glium::texture::MipmapsOption::NoMipmap,
-                initial_size as u32,
-                initial_size as u32
+                initial_size,
+                initial_size,
             ).unwrap(),
             cache: Cache::new(0, 0, tolerance.0, tolerance.1),
             hidpi_factor: dpi, // FIXME: ask window + may need updating?
@@ -64,37 +65,37 @@ impl<'a> Render<'a> {
     }
 }
 
-pub struct Text<'a, P: Clone> {
-    /// Either this is the first part of a text run, or it continues a previous text run,
-    /// likely with a different `Style`.
-    pub at: Run<P>,
+pub struct Text<'a> {
     pub style: Style,
     pub text: Cow<'a, str>,
 }
-impl<'a, P> Text<'a, P>
-where P: Clone
+impl<'a, I> From<(Style, I)> for Text<'a>
+where
+    I: Into<Cow<'a, str>>,
 {
-    fn new_layout(&self) -> LayoutBlock<P> {
-        if let Run::Head { ref pos, width } = self.at {
-            LayoutBlock::new(pos.clone(), width as i32)
-        } else {
-            panic!("not a head");
+    fn from((s, t): (Style, I)) -> Self {
+        Text {
+            style: s,
+            text: t.into(),
         }
     }
 }
-
-#[derive(Clone)]
-pub enum Run<P> {
-    /// Defines where, and how large.
-    Head {
-        /// Where this text is located in space. In 2D applications, `(i32, i32)` is quite sufficient.
-        /// 3D applications will likely need some point3, orientation, `right`, and `down`.
-        pos: P,
-        /// How much space the text run can use.
-        width: u32,
-    },
-    /// This is a continuation of a previous `Text` object with a different style.
-    Tail,
+// Can't do From<Cow>...
+impl<'a> From<String> for Text<'a> {
+    fn from(t: String) -> Self {
+        Text {
+            style: Style::default(),
+            text: t.into(),
+        }
+    }
+}
+impl<'a> From<&'a str> for Text<'a> {
+    fn from(t: &'a str) -> Self {
+        Text {
+            style: Style::default(),
+            text: t.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,7 +119,7 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
-            scale: 16.0,
+            scale: 24.0,
             color: (0, 0, 0, 0xFF),
             fontid: 0,
 
@@ -133,8 +134,7 @@ impl Style {
     pub fn new() -> Self {
         Self::default()
     }
-}
-impl Style {
+
     fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> Option<(usize, Glyph<'fonts>)>
         where 'context: 'fonts
     {
@@ -146,25 +146,20 @@ impl Style {
 }
 
 pub enum FlowControl {
-    Enter,
-    Continue,
-    Break,
+    Next,
+    Skip,
+    Stop,
 }
 
-struct LayoutBlock<P: Clone> {
-    origin: P,
-    width: i32,
-    caret: Point<f32>,
-    unit_start: usize,
-    any_break: bool,
-    max_area: Point<f32>,
-    last_glyph_id: Option<GlyphId>,
+pub struct Layout<P> {
+    pub origin: P,
+    pub width: u32,
 }
-impl<P: Clone> LayoutBlock<P> {
-    fn new(origin: P, width: i32) -> Self {
+impl<P> Layout<P> {
+    fn to_block<'a>(&'a self) -> LayoutBlock<'a, P> {
         LayoutBlock {
-            origin: origin,
-            width: width,
+            origin: &self.origin,
+            width: self.width,
             caret: point(0.0, 0.0),
             unit_start: 0,
             any_break: false,
@@ -172,7 +167,20 @@ impl<P: Clone> LayoutBlock<P> {
             last_glyph_id: None,
         }
     }
+}
 
+struct LayoutBlock<'a, P>
+where P: 'a
+{
+    origin: &'a P,
+    width: u32,
+    caret: Point<f32>,
+    unit_start: usize,
+    any_break: bool,
+    max_area: Point<f32>,
+    last_glyph_id: Option<GlyphId>,
+}
+impl<'a, P> LayoutBlock<'a, P> {
     fn bump_line(&mut self, advance_height: f32) {
         if self.caret.x > self.max_area.x { self.max_area.x = self.caret.x; }
         self.caret = point(0.0, self.caret.y + advance_height);
@@ -180,110 +188,121 @@ impl<P: Clone> LayoutBlock<P> {
     }
 }
 
-pub struct Buffer<'text, P: Clone> {
-    parts: Vec<Text<'text, P>>,
+
+pub struct RunBuffer<'text, P> {
+    parts: Vec<Text<'text>>,
+    runs: Vec<(Range<usize>, Layout<P>)>,
 }
-impl<'text, P> Buffer<'text, P>
+impl<'text, P> RunBuffer<'text, P>
 where
-    P: Clone,
     P: 'text,
 {
     pub fn new() -> Self {
-        Buffer {
+        RunBuffer {
             parts: Vec::new(),
+            runs: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, t: Text<'text, P>) {
-        self.parts.push(t);
-    }
-
-    pub fn push_run<I>(&mut self, start: P, width: u32, mut run: I)
-    where
-        I: Iterator<Item=(Style, Cow<'text, str>)>,
+    pub fn push_run<I>(&mut self, layout: Layout<P>, it: I)
+    where I: Iterator<Item=Text<'text>>
     {
-        if let Some(t) = run.next() {
-            self.push(Text {
-                at: Run::Head {
-                    pos: start,
-                    width: width as u32,
-                },
-                style: t.0,
-                text: t.1,
-            });
+        let start = self.parts.len();
+        for text in it {
+            self.parts.push(text);
         }
-        for t in run {
-            self.push(Text {
-                at: Run::Tail,
-                style: t.0,
-                text: t.1,
-            });
-        }
+        let end = self.parts.len();
+        self.runs.push((start..end, layout));
+    }
+
+    pub fn push(&mut self, layout: Layout<P>, t: Text<'text>) {
+        self.push_run(layout, Some(t).into_iter())
     }
 
     pub fn write<S>(&mut self, pos: P, width: u32, text: S)
     where S: Into<Cow<'text, str>>
     {
-        self.push(Text {
-            at: Run::Head {
-                pos: pos,
+        self.push(
+            Layout {
+                origin: pos,
                 width: width
             },
-            text: text.into(),
-            style: Style::default(),
-        });
+            Text {
+                text: text.into(),
+                style: Style::default(),
+            },
+        );
     }
 
     pub fn reset(&mut self) {
         self.parts.clear();
+        self.runs.clear();
     }
 
-    /// You're in charge of building the vertex buffer.
+    /// Runs the layout algorithm, and uploads glyphs to the cache.
+    /// 
+    /// `write_glyph` is called with each positioned glyph. You can use this to build your vertex
+    /// buffer.
+    /// 
+    /// The first parameter holds the `Text` and `Style`.
+    /// The second parameter is the `origin`, `&P`.
+    /// The third parameter specifies the rectangle the glyph occupises, relative to the `origin`.
+    /// For example, if P is a point in a 2D UI, then the glyph is simply positioned at `origin + offset`.
+    /// The fourth parameter is UV coordinates.
     pub fn build<'fonts, F>(
         &mut self,
         render: &'fonts mut Render,
         mut write_glyph: F
     )
     where
-        F: for<'x, 'y> FnMut(&'x Text<'y, P>, &P, Rect<i32>, Rect<f32>),
+        F: for<'x, 'y> FnMut(&'x Text<'y>, &P, Rect<i32>, Rect<f32>) -> FlowControl,
     {
-        let mut layout = match self.parts.first() {
-            None => return,
-            Some(l) => l.new_layout(),
-        };
+        use std::collections::HashSet;
+        //let mut unique_glyphs = HashSet::new();
         let mut glyphs = Vec::new();
-        for text in &self.parts {
-            layout_paragraph(
-                &mut layout,
-                &mut glyphs,
-                render.hidpi_factor,
-                &render.fonts,
-                text,
-            );
-            for &(fontid, ref glyph) in &glyphs {
-                render.cache.queue_glyph(fontid, glyph.clone());
+        let mut glyph_run: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
+        for &(ref range, ref layout) in &self.runs {
+            let mut layout_block = layout.to_block();
+            for text in &self.parts[range.clone()] {
+                let start = glyphs.len();
+                layout_paragraph(
+                    &mut layout_block,
+                    &mut glyphs,
+                    render.hidpi_factor,
+                    &render.fonts,
+                    text,
+                );
+                let end = glyphs.len();
+                glyph_run.push((layout, text, start..end));
             }
-            let texture = &mut render.texture;
-            render.cache.cache_queued(|rect, data| {
-                texture.main_level().write(glium::Rect {
-                    left: rect.min.x,
-                    bottom: rect.min.y,
-                    width: rect.width(),
-                    height: rect.height(),
-                }, glium::texture::RawImage2d {
-                    data: Cow::Borrowed(data),
-                    width: rect.width(),
-                    height: rect.height(),
-                    format: glium::texture::ClientFormat::U8,
-                });
-            }).unwrap();
-            for &(fontid, ref glyph) in &glyphs {
+        }
+        for &(fontid, ref glyph) in &glyphs {
+            render.cache.queue_glyph(fontid, glyph.clone());
+        }
+        let texture = &mut render.texture;
+        render.cache.cache_queued(|rect, data| {
+            texture.main_level().write(glium::Rect {
+                left: rect.min.x,
+                bottom: rect.min.y,
+                width: rect.width(),
+                height: rect.height(),
+            }, glium::texture::RawImage2d {
+                data: Cow::Borrowed(data),
+                width: rect.width(),
+                height: rect.height(),
+                format: glium::texture::ClientFormat::U8,
+            });
+        }).unwrap();
+        for (layout, text, range) in glyph_run {
+            for &(fontid, ref glyph) in &glyphs[range] {
                 if let Ok(Some((uv, pos))) = render.cache.rect_for(fontid, glyph) {
-                    write_glyph(text, &layout.origin, pos, uv);
+                    match write_glyph(text, &layout.origin, pos, uv) {
+                        FlowControl::Next => (),
+                        FlowControl::Skip => break,
+                        FlowControl::Stop => return,
+                    }
                 }
             }
-
-            glyphs.clear();
         }
     }
 }
@@ -292,18 +311,11 @@ fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text, P>(
     result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
     dpi: f32,
     fonts: &'context Vec<Font<'fonts>>,
-    text: &'text Text<P>,
+    text: &'text Text<'text>,
 ) -> Point<f32>
 where
     'context: 'fonts,
-    P: Clone,
 {
-    match text.at {
-        Run::Head { ref pos, width } => {
-            *layout = LayoutBlock::new(pos.clone(), width as i32);
-        },
-        _ => {},
-    }
     let style = &text.style;
     let scale = Scale::uniform(text.style.scale * dpi);
     let v_metrics = fonts[0].v_metrics(scale);
@@ -337,7 +349,7 @@ where
         layout.last_glyph_id = Some(base_glyph.id());
         let mut glyph: PositionedGlyph = base_glyph.scaled(scale).positioned(layout.caret);
         if let Some(bb) = glyph.pixel_bounding_box() {
-            if bb.max.x > layout.width {
+            if bb.max.x as i64 > layout.width as i64 {
                 layout.bump_line(advance_height);
                 if result.len() > layout.unit_start && layout.any_break {
                     // There's probably some weird degenerate case where this'd panic w/o this
@@ -372,7 +384,7 @@ pub mod simple2d {
 
     /// Something to get you up & running.
     pub struct Simple2d {
-        program: Program,
+        pub program: Program,
     }
     impl Simple2d {
         pub fn create<G: Facade>(gl: &G) -> Result<Simple2d, ProgramChooserCreationError> {
@@ -420,7 +432,7 @@ pub mod simple2d {
             gl: &G,
             target: &mut glium::Frame,
             font: &mut Render,
-            buffer: &mut Buffer<(i32, i32)>
+            buffer: &mut RunBuffer<(i32, i32)>
         ) -> Result<(), glium::DrawError>
         {
             let (screen_width, screen_height) = target.get_dimensions();
@@ -476,6 +488,7 @@ pub mod simple2d {
                     },
                 ];
                 vertices.extend_from_slice(&verts[..]);
+                FlowControl::Next
             });
 
             let vbo = glium::VertexBuffer::new(gl, &vertices).unwrap();

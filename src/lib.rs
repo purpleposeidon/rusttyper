@@ -238,6 +238,27 @@ where
         self.runs.clear();
     }
 
+    /// Runs the layout algorithm on the most recently added run, and returns the amount of space
+    /// used, and its `Layout` object.
+    pub fn measure_area<'fonts>(&mut self, render: &'fonts mut Render) -> (Point<f32>, &mut Layout<P>) {
+        let &mut(ref range, ref mut layout) = self.runs.last_mut().expect("measure_height called with any run");
+        let mut layout_block = layout.to_block();
+        let mut glyphs = Vec::new();
+        let mut max_area = point(0.0, 0.0);
+        for text in &self.parts[range.clone()] {
+            let nm = layout_paragraph(
+                &mut layout_block,
+                &mut glyphs,
+                render.hidpi_factor,
+                &render.fonts,
+                text,
+            );
+            if nm.x > max_area.x { max_area.x = nm.x; }
+            if nm.y > max_area.y { max_area.y = nm.y; }
+        }
+        (max_area, layout)
+    }
+
     /// Runs the layout algorithm, and uploads glyphs to the cache.
     /// 
     /// `write_glyph` is called with each positioned glyph. You can use this to build your vertex

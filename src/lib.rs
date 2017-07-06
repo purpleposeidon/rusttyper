@@ -191,6 +191,7 @@ impl LayoutBlock {
 pub struct RunBuffer<'text, P> {
     parts: Vec<Text<'text>>,
     runs: Vec<(Range<usize>, Layout<P>)>,
+    char_count: usize,
 }
 impl<'text, P> RunBuffer<'text, P>
 where
@@ -200,6 +201,7 @@ where
         RunBuffer {
             parts: Vec::new(),
             runs: Vec::new(),
+            char_count: 0,
         }
     }
 
@@ -208,6 +210,7 @@ where
     {
         let start = self.parts.len();
         for text in it {
+            self.char_count += text.text.len();
             self.parts.push(text);
         }
         let end = self.parts.len();
@@ -236,6 +239,13 @@ where
     pub fn reset(&mut self) {
         self.parts.clear();
         self.runs.clear();
+        self.char_count = 0;
+    }
+
+    /// Returns an estimate of how many glyphs are in the buffer. This may be inaccurate due to eg
+    /// ligatures and normalization.
+    pub fn glyph_estimate(&self) -> usize {
+        self.char_count
     }
 
     /// Runs the layout algorithm on the most recently added run, and returns the amount of space

@@ -187,7 +187,7 @@ impl LayoutBlock {
     }
 }
 
-
+#[derive(Default)]
 pub struct RunBuffer<'text, P> {
     parts: Vec<Text<'text>>,
     runs: Vec<(Range<usize>, Layout<P>)>,

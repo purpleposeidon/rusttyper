@@ -217,8 +217,10 @@ where
         self.runs.push((start..end, layout));
     }
 
-    pub fn push(&mut self, layout: Layout<P>, t: Text<'text>) {
-        self.push_run(layout, Some(t).into_iter())
+    pub fn push<T>(&mut self, layout: Layout<P>, t: T)
+    where T: Into<Text<'text>>
+    {
+        self.push_run(layout, Some(t.into()).into_iter())
     }
 
     pub fn write<S>(&mut self, pos: P, width: u32, text: S)

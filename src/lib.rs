@@ -108,7 +108,8 @@ pub struct Style {
     pub fontid: usize,
 
     /// Mark the text for drawing with shadows. This is not implemented here.
-    pub shadow: bool,
+    pub shadow: Option<(u8, u8, u8, u8)>,
+    // FIXME: bitflags
     /// NYI
     pub bold: bool,
     /// NYI
@@ -125,7 +126,7 @@ impl Default for Style {
             color: (0, 0, 0, 0xFF),
             fontid: 0,
 
-            shadow: false,
+            shadow: None,
             bold: false,
             italic: false,
             underline: false,

@@ -5,7 +5,7 @@ This code is based from the example in [rusttype](https://github.com/dylanede/ru
 Planned features:
 - [x] Word-wrapping
 - [ ] Fallback fonts
-- [ ] Styling (Bold, italic, underline, color)
+- [x] Styling (Bold, italic, underline, color)
 - [ ] Icons & emoji
 - [ ] LTR support
 

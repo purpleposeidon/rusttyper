@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["neptunepink <purpleposeidon@gmail.com>"]
 
 [dependencies]
-rusttype = "^0.2.3"
 glium = "^0.16"
 unicode-normalization = "^0.1.2"
+
+[dependencies.rusttype]
+version = "0.6.2"
+features = ["gpu_cache"]

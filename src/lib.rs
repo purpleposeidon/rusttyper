@@ -7,30 +7,53 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use glium::texture::Texture2d;
-use glium::backend::Facade;
 use glium::backend::glutin_backend::GlutinFacade;
 
 pub use rusttype::{Scale, point, Point, vector, Vector, Rect, SharedBytes};
 use rusttype::{Font, FontCollection, PositionedGlyph, Glyph, GlyphId};
+pub use rusttype::gpu_cache::Cache;
 use rusttype::gpu_cache::*;
 
+const INVALID_GLYPH_ID: GlyphId = GlyphId(0);
+
+fn leak<T: 'static>(t: T) -> &'static mut T {
+    let ret = Box::into_raw(Box::new(t));
+    unsafe {
+        ::std::mem::transmute(ret)
+    }
+}
 
 
-pub struct Render<'a> {
-    fonts: Vec<Font<'a>>,
+// FIXME: Lame name.
+pub struct Render {
+    fonts: Vec<Font<'static>>,
     pub texture: Texture2d,
-    cache: Cache,
     hidpi_factor: f32,
+    size: u32,
     tolerance: (f32, f32),
 }
-impl<'a> Render<'a> {
+impl Render {
+    fn build_builder(size: u32, tolerance: (f32, f32)) -> CacheBuilder {
+        CacheBuilder {
+            width: size,
+            height: size,
+            scale_tolerance: tolerance.0,
+            position_tolerance: tolerance.1,
+            .. CacheBuilder::default()
+        }
+    }
+
+    pub fn new_cache<'a>(&self) -> Cache<'a> {
+        Self::build_builder(self.size, self.tolerance).build()
+    }
+
     /// texture_size: 512, tolerance: (0.1, 0.1)
     pub fn new(gl: &GlutinFacade, texture_size: u32, tolerance: (f32, f32)) -> Self {
         let dpi = gl.get_window().unwrap().hidpi_factor();
         // We can always just resize it if it's too small.
         let initial_size = (texture_size as f32 * dpi) as u32;
 
-        let mut ret = Render {
+        Render {
             fonts: Vec::new(),
             texture: Texture2d::empty_with_format(
                 gl,
@@ -39,29 +62,20 @@ impl<'a> Render<'a> {
                 initial_size,
                 initial_size,
             ).unwrap(),
-            cache: Cache::new(0, 0, tolerance.0, tolerance.1),
+            size: texture_size,
             hidpi_factor: dpi, // FIXME: ask window + may need updating?
             tolerance: tolerance,
-        };
-        ret.set_cache(gl, initial_size as u32);
-        ret
+        }
     }
 
-    pub fn add_fonts<B>(&mut self, bytes: B)
-    where B: Into<SharedBytes<'a>>,
+    pub fn add_fonts<B>(&mut self, bytes: B) -> Result<(), ::rusttype::Error>
+    where B: Into<SharedBytes<'static>>,
     {
-        let fonts = FontCollection::from_bytes(bytes);
-        self.fonts.extend(fonts.into_fonts());
-    }
-
-    fn set_cache<G: Facade>(&mut self, gl: &G, size: u32) {
-        let dim = (size, size);
-        if self.cache.dimensions() != dim {
-            self.cache = Cache::new(size, size, self.tolerance.0, self.tolerance.1);
+        let fonts = FontCollection::from_bytes(bytes)?;
+        for font in fonts.into_fonts() {
+            self.fonts.push(font?);
         }
-        if self.texture.dimensions() != dim {
-            self.texture = Texture2d::empty(gl, size, size).unwrap();
-        }
+        Ok(())
     }
 }
 
@@ -139,13 +153,17 @@ impl Style {
         Self::default()
     }
 
-    fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> Option<(usize, Glyph<'fonts>)>
-        where 'context: 'fonts
+    fn get_glyph<'context, 'fonts>(
+        &self,
+        c: char,
+        fonts: &'context [Font<'fonts>],
+    ) -> (usize, Glyph<'fonts>)
+    where 'context: 'fonts
     {
         // FIXME: Try fallback fonts.
         // FIXME: How do we figure out who the bold fonts are?
         let font = &fonts[self.fontid];
-        font.glyph(c).map(|g| (self.fontid, g))
+        (self.fontid, font.glyph(c))
     }
 }
 
@@ -273,18 +291,19 @@ where
     }
 
     /// Runs the layout algorithm, and uploads glyphs to the cache.
-    /// 
+    ///
     /// `write_glyph` is called with each positioned glyph. You can use this to build your vertex
     /// buffer.
-    /// 
+    ///
     /// The first parameter holds the `Text` and `Style`.
     /// The second parameter is the `origin`, `&P`.
     /// The third parameter specifies the rectangle the glyph occupises, relative to the `origin`.
     /// For example, if P is a point in a 2D UI, then the glyph is simply positioned at `origin + offset`.
     /// The fourth parameter is UV coordinates.
-    pub fn build<'fonts, F>(
+    pub fn build<'a, F>(
         &mut self,
-        render: &'fonts mut Render,
+        render: &'a mut Render,
+        cache: &mut Cache<'a>,
         mut write_glyph: F
     )
     where
@@ -308,13 +327,13 @@ where
             }
         }
         for &(fontid, ref glyph) in &glyphs {
-            render.cache.queue_glyph(fontid, glyph.clone());
+            cache.queue_glyph(fontid, glyph.clone());
         }
         let texture = &mut render.texture;
         // I think this is O(total # of glyphs) rather than O(total # of unique glyphs), but the
         // two numbers were actually fairly similar. (There are extra variants due to sub-pixel
         // positioning?)
-        render.cache.cache_queued(|rect, data| {
+        cache.cache_queued(|rect, data| {
             texture.main_level().write(glium::Rect {
                 left: rect.min.x,
                 bottom: rect.min.y,
@@ -329,7 +348,7 @@ where
         }).unwrap();
         for (layout, text, range) in glyph_run {
             for &(fontid, ref glyph) in &glyphs[range] {
-                if let Ok(Some((uv, pos))) = render.cache.rect_for(fontid, glyph) {
+                if let Ok(Some((uv, pos))) = cache.rect_for(fontid, glyph) {
                     match write_glyph(text, &layout.origin, pos, uv) {
                         FlowControl::Next => (),
                         FlowControl::Skip => break,
@@ -354,11 +373,15 @@ where
     let scale = Scale::uniform(text.style.scale * dpi);
     let v_metrics = fonts[0].v_metrics(scale);
     let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
-    let replacement_char = style.get_glyph('�', fonts).or_else(|| style.get_glyph('?', fonts));
+    let mut replacement_char = style.get_glyph('�', fonts);
+    if replacement_char.1.id() == INVALID_GLYPH_ID {
+        replacement_char = style.get_glyph('?', fonts);
+    }
     let is_separator = |c: char| {
         c == ' '
     };
     use self::unicode_normalization::UnicodeNormalization;
+    // FIXME: Shouldn't unicode_normalization be done, like, by the user?
     for c in text.text.nfc() {
         if c.is_control() {
             if c == '\n' {
@@ -372,9 +395,11 @@ where
             layout.unit_start = result.len() + 1; // We break at the *next* character
             layout.any_break = true;
         }
-        let (fontid, base_glyph) = match style.get_glyph(c, fonts).or_else(|| replacement_char.clone()) {
-            Some((fontid, glyph)) => (fontid, glyph),
-            None => continue,
+        let glyph = style.get_glyph(c, fonts);
+        let (fontid, base_glyph) = if glyph.1.id() == INVALID_GLYPH_ID {
+            replacement_char.clone()
+        } else {
+            glyph
         };
         let font = &fonts[fontid];
         if let Some(id) = layout.last_glyph_id.take() {
@@ -408,6 +433,7 @@ where
 }
 
 
+// FIXME: Own file.
 pub mod simple2d {
     use super::*;
 
@@ -461,18 +487,53 @@ pub mod simple2d {
            })
         }
 
-        pub fn draw<G: Facade>(
+        pub fn draw<'a, G: Facade>(
             &self,
             gl: &G,
             target: &mut glium::Frame,
-            font: &mut Render,
-            buffer: &mut RunBuffer<(i32, i32)>
+            font: &'a mut Render,
+            cache: &mut Cache<'a>,
+            buffer: &mut RunBuffer<(i32, i32)>,
         ) -> Result<(), glium::DrawError>
+        {
+            let mut vertices = Vec::new();
+            self.compile_glyphs(
+                target,
+                font,
+                cache,
+                buffer,
+                &mut vertices,
+            );
+            let no_more_fucking_borrow: &Render = &*font;
+
+            let vbo = glium::VertexBuffer::new(gl, &vertices).unwrap();
+            let uniforms = uniform! {
+                tex: font.texture.sampled().magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
+            };
+            target.draw(
+                &vbo,
+                glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList),
+                &self.program,
+                &uniforms,
+                &glium::DrawParameters {
+                    blend: glium::Blend::alpha_blending(),
+                    .. Default::default()
+                },
+            )
+        }
+
+        fn compile_glyphs<'a>(
+            &self,
+            target: &mut glium::Frame,
+            font: &'a mut Render,
+            cache: &mut Cache<'a>,
+            buffer: &mut RunBuffer<(i32, i32)>,
+            vertices: &mut Vec<Vertex>,
+        )
         {
             let (screen_width, screen_height) = target.get_dimensions();
             let (screen_width, screen_height) = (screen_width as f32, screen_height as f32);
-            let mut vertices = Vec::new();
-            buffer.build(font, |text, origin, pos_rect, uv_rect| {
+            buffer.build(font, cache, |text, origin, pos_rect, uv_rect| {
                 let color = {
                     let c = text.style.color;
                     let f = |c| c as f32 / 255.0;
@@ -524,21 +585,6 @@ pub mod simple2d {
                 vertices.extend_from_slice(&verts[..]);
                 FlowControl::Next
             });
-
-            let vbo = glium::VertexBuffer::new(gl, &vertices).unwrap();
-            let uniforms = uniform! {
-                tex: font.texture.sampled().magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
-            };
-            target.draw(
-                &vbo,
-                glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList),
-                &self.program,
-                &uniforms,
-                &glium::DrawParameters {
-                    blend: glium::Blend::alpha_blending(),
-                    .. Default::default()
-                },
-            )
         }
     }
 

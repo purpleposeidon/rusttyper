@@ -155,6 +155,7 @@ pub enum FlowControl {
     Stop,
 }
 
+#[derive(Debug, Clone)]
 pub struct Layout<P> {
     pub origin: P,
     pub width: u32,

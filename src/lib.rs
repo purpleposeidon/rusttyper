@@ -255,7 +255,7 @@ where
     /// Runs the layout algorithm on the most recently added run, and returns the amount of space
     /// used, and its `Layout` object.
     pub fn measure_area<'fonts>(&mut self, render: &'fonts mut Render) -> (Point<f32>, &mut Layout<P>) {
-        let &mut(ref range, ref mut layout) = self.runs.last_mut().expect("measure_height called with any run");
+        let &mut(ref range, ref mut layout) = self.runs.last_mut().expect("measure_area called but there were no runs");
         let mut layout_block = layout.to_block();
         let mut glyphs = Vec::new();
         let mut max_area = point(0.0, 0.0);
@@ -270,6 +270,7 @@ where
             if nm.x > max_area.x { max_area.x = nm.x; }
             if nm.y > max_area.y { max_area.y = nm.y; }
         }
+        layout_block.bump_line(0.0);
         (max_area, layout)
     }
 
@@ -405,7 +406,9 @@ where
         layout.caret.x += glyph.unpositioned().h_metrics().advance_width;
         result.push((fontid, glyph));
     }
-    layout.max_area.clone()
+    let mut ret = layout.max_area.clone();
+    ret.x = ret.x.max(layout.caret.x);
+    ret
 }
 
 

@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use glium::texture::Texture2d;
 use glium::backend::Facade;
-use glium::backend::glutin_backend::GlutinFacade;
+use glium::backend::glutin::Display;
 
 pub use rusttype::{Scale, point, Point, vector, Vector, Rect, SharedBytes};
 use rusttype::{Font, FontCollection, PositionedGlyph, Glyph, GlyphId};
@@ -20,15 +20,15 @@ pub struct Render<'a> {
     fonts: Vec<Font<'a>>,
     pub texture: Texture2d,
     cache: Cache,
-    hidpi_factor: f32,
+    hidpi_factor: f64,
     tolerance: (f32, f32),
 }
 impl<'a> Render<'a> {
     /// texture_size: 512, tolerance: (0.1, 0.1)
-    pub fn new(gl: &GlutinFacade, texture_size: u32, tolerance: (f32, f32)) -> Self {
-        let dpi = gl.get_window().unwrap().hidpi_factor();
+    pub fn new(gl: &Display, texture_size: u32, tolerance: (f32, f32)) -> Self {
+        let dpi = gl.gl_window().get_hidpi_factor();
         // We can always just resize it if it's too small.
-        let initial_size = (texture_size as f32 * dpi) as u32;
+        let initial_size = (texture_size as f64 * dpi) as u32;
 
         let mut ret = Render {
             fonts: Vec::new(),
@@ -345,7 +345,7 @@ where
 fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text>(
     layout: &'layout mut LayoutBlock,
     result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
-    dpi: f32,
+    dpi: f64,
     fonts: &'context Vec<Font<'fonts>>,
     text: &'text Text<'text>,
 ) -> Point<f32>
@@ -353,7 +353,7 @@ where
     'context: 'fonts,
 {
     let style = &text.style;
-    let scale = Scale::uniform(text.style.scale * dpi);
+    let scale = Scale::uniform((text.style.scale as f64 * dpi) as f32);
     let v_metrics = fonts[0].v_metrics(scale);
     let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
     let replacement_char = style.get_glyph('�', fonts).or_else(|| style.get_glyph('?', fonts));

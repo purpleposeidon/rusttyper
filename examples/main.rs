@@ -1,7 +1,7 @@
 extern crate rusttyper;
 extern crate glium;
 
-use glium::{DisplayBuild, Surface};
+use glium::{Surface};
 use glium::glutin;
 
 static TEXT: &'static str = r#"Hello, world!
@@ -27,12 +27,14 @@ Nor can we handle LTR text!?
 "#;
 
 fn main() {
-    let display = glutin::WindowBuilder::new()
-        .with_vsync()
-        .with_dimensions(512, 512)
+    let mut events_loop = glutin::EventsLoop::new();
+    let window = glutin::WindowBuilder::new()
         .with_title("Rusttyper Example")
-        .build_glium()
-        .unwrap();
+        .with_dimensions(glutin::dpi::LogicalSize::new(512.0, 512.0));
+    let context = glutin::ContextBuilder::new()
+        .with_vsync(true)
+        .with_multisampling(8);
+    let display = glium::Display::new(window, context, &events_loop).unwrap();
 
     let mut font = rusttyper::Render::new(&display, 512, (0.1, 0.1));
     font.add_fonts(&include_bytes!("../DroidSans.ttf")[..]);
@@ -41,13 +43,17 @@ fn main() {
     let mut count = 0usize;
     loop {
         count += 1;
-        for event in display.poll_events() {
+        let mut stop = false;
+        events_loop.poll_events(|event| {
+            use glutin::{Event, WindowEvent, KeyboardInput, VirtualKeyCode};
             match event {
-                glutin::Event::KeyboardInput(_, _, Some(glutin::VirtualKeyCode::Escape)) |
-                glutin::Event::Closed => return,
-                _ => {}
+                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => stop = true,
+                Event::WindowEvent { event: WindowEvent::Destroyed, .. } => stop = true,
+                Event::WindowEvent { event: WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode: Some(VirtualKeyCode::Escape), .. }, .. }, .. } => stop = true,
+                _ => {},
             }
-        }
+        });
+        if stop { break; }
 
         let mut buffer = ::rusttyper::RunBuffer::new();
         {

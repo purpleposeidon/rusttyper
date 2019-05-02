@@ -5,5 +5,5 @@ authors = ["neptunepink <purpleposeidon@gmail.com>"]
 
 [dependencies]
 rusttype = "^0.2.3"
-glium = "^0.16"
+glium = "^0.24"
 unicode-normalization = "^0.1.2"

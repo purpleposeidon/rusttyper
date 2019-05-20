@@ -100,7 +100,7 @@ impl<'a> From<&'a str> for Text<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
-    /// The size of the font. The default scale is 16.0.
+    /// The size of the font. The default scale is 24.0.
     pub scale: f32,
     /// RGBA color components, from 0 to 255.
     pub color: (u8, u8, u8, u8),

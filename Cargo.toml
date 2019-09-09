@@ -1,7 +1,10 @@
 [package]
 name = "rusttyper"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["neptunepink <purpleposeidon@gmail.com>"]
+license = "MIT / Apache-2.0"
+description = "Basic text layout, using rusttype."
+repository = "https://github.com/purpleposeidon/rusttyper"
 
 [dependencies]
 rusttype = "^0.2.3"

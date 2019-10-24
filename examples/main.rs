@@ -37,7 +37,7 @@ fn main() {
     let display = glium::Display::new(window, context, &events_loop).unwrap();
 
     let mut font = rusttyper::Render::new(&display, 512, (0.1, 0.1));
-    font.add_fonts(&include_bytes!("../DroidSans.ttf")[..]);
+    font.add_fonts(&include_bytes!("../DroidSans.ttf")[..]).unwrap();
 
     let uidraw = rusttyper::simple2d::Simple2d::create(&display).unwrap();
     let mut count = 0usize;

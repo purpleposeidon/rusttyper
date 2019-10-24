@@ -1,12 +1,12 @@
 [package]
 name = "rusttyper"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["neptunepink <purpleposeidon@gmail.com>"]
 license = "MIT / Apache-2.0"
 description = "Basic text layout, using rusttype."
 repository = "https://github.com/purpleposeidon/rusttyper"
 
 [dependencies]
-rusttype = "^0.2.3"
-glium = "^0.24"
+glium = "^0.25"
 unicode-normalization = "^0.1.2"
+rusttype = { version = "0.8", features = ["gpu_cache"] }

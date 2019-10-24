@@ -14,19 +14,21 @@ pub use rusttype::{Scale, point, Point, vector, Vector, Rect, SharedBytes};
 use rusttype::{Font, FontCollection, PositionedGlyph, Glyph, GlyphId};
 use rusttype::gpu_cache::*;
 
+use self::unicode_normalization::UnicodeNormalization;
+
 
 
 pub struct Render<'a> {
     fonts: Vec<Font<'a>>,
     pub texture: Texture2d,
-    cache: Cache,
+    cache: Cache<'a>,
     hidpi_factor: f64,
     tolerance: (f32, f32),
 }
 impl<'a> Render<'a> {
     /// texture_size: 512, tolerance: (0.1, 0.1)
     pub fn new(gl: &Display, texture_size: u32, tolerance: (f32, f32)) -> Self {
-        let dpi = gl.gl_window().get_hidpi_factor();
+        let dpi = gl.gl_window().window().get_hidpi_factor();
         // We can always just resize it if it's too small.
         let initial_size = (texture_size as f64 * dpi) as u32;
 
@@ -39,7 +41,7 @@ impl<'a> Render<'a> {
                 initial_size,
                 initial_size,
             ).unwrap(),
-            cache: Cache::new(0, 0, tolerance.0, tolerance.1),
+            cache: Cache::builder().build(),
             hidpi_factor: dpi, // FIXME: ask window + may need updating?
             tolerance: tolerance,
         };
@@ -47,17 +49,24 @@ impl<'a> Render<'a> {
         ret
     }
 
-    pub fn add_fonts<B>(&mut self, bytes: B)
+    pub fn add_fonts<B>(&mut self, bytes: B) -> Result<(), rusttype::Error>
     where B: Into<SharedBytes<'a>>,
     {
-        let fonts = FontCollection::from_bytes(bytes);
-        self.fonts.extend(fonts.into_fonts());
+        let fonts = FontCollection::from_bytes(bytes)?;
+        for font in fonts.into_fonts() {
+            self.fonts.push(font?);
+        }
+        Ok(())
     }
 
     fn set_cache<G: Facade>(&mut self, gl: &G, size: u32) {
         let dim = (size, size);
         if self.cache.dimensions() != dim {
-            self.cache = Cache::new(size, size, self.tolerance.0, self.tolerance.1);
+            self.cache = Cache::builder()
+                .dimensions(size, size)
+                .scale_tolerance(self.tolerance.0)
+                .position_tolerance(self.tolerance.1)
+                .build();
         }
         if self.texture.dimensions() != dim {
             self.texture = Texture2d::empty(gl, size, size).unwrap();
@@ -139,13 +148,14 @@ impl Style {
         Self::default()
     }
 
-    fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> Option<(usize, Glyph<'fonts>)>
-        where 'context: 'fonts
+    fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> (usize, Glyph<'fonts>)
+        where 'fonts: 'context
     {
         // FIXME: Try fallback fonts.
         // FIXME: How do we figure out who the bold fonts are?
         let font = &fonts[self.fontid];
-        font.glyph(c).map(|g| (self.fontid, g))
+        let g = font.glyph(c);
+        (self.fontid, g)
     }
 }
 
@@ -275,24 +285,24 @@ where
     }
 
     /// Runs the layout algorithm, and uploads glyphs to the cache.
-    /// 
+    ///
     /// `write_glyph` is called with each positioned glyph. You can use this to build your vertex
     /// buffer.
-    /// 
+    ///
     /// The first parameter holds the `Text` and `Style`.
     /// The second parameter is the `origin`, `&P`.
     /// The third parameter specifies the rectangle the glyph occupises, relative to the `origin`.
     /// For example, if P is a point in a 2D UI, then the glyph is simply positioned at `origin + offset`.
     /// The fourth parameter is UV coordinates.
-    pub fn build<'fonts, F>(
+    pub fn build<F>(
         &mut self,
-        render: &'fonts mut Render,
+        render: &mut Render,
         mut write_glyph: F
     )
     where
         F: for<'x, 'y> FnMut(&'x Text<'y>, &P, Rect<i32>, Rect<f32>) -> FlowControl,
     {
-        let mut glyphs = Vec::new();
+        let mut glyphs: Vec<(usize, PositionedGlyph)> = Vec::new();
         let mut glyph_run: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
         for &(ref range, ref layout) in &self.runs {
             let mut layout_block = layout.to_block();
@@ -350,17 +360,13 @@ fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text>(
     text: &'text Text<'text>,
 ) -> Point<f32>
 where
-    'context: 'fonts,
+    'fonts: 'context,
 {
     let style = &text.style;
     let scale = Scale::uniform((text.style.scale as f64 * dpi) as f32);
     let v_metrics = fonts[0].v_metrics(scale);
-    let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
-    let replacement_char = style.get_glyph('�', fonts).or_else(|| style.get_glyph('?', fonts));
-    let is_separator = |c: char| {
-        c == ' '
-    };
-    use self::unicode_normalization::UnicodeNormalization;
+    let advance_height: f32 = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
+    let is_separator = |c: char| c == ' ';
     for c in text.text.nfc() {
         if c.is_control() {
             if c == '\n' {
@@ -374,10 +380,7 @@ where
             layout.unit_start = result.len() + 1; // We break at the *next* character
             layout.any_break = true;
         }
-        let (fontid, base_glyph) = match style.get_glyph(c, fonts).or_else(|| replacement_char.clone()) {
-            Some((fontid, glyph)) => (fontid, glyph),
-            None => continue,
-        };
+        let (fontid, base_glyph) = style.get_glyph(c, fonts);
         let font = &fonts[fontid];
         if let Some(id) = layout.last_glyph_id.take() {
             layout.caret.x += font.pair_kerning(scale, id, base_glyph.id());

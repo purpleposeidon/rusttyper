@@ -1,6 +1,6 @@
 [package]
 name = "rusttyper"
-version = "0.4.2"
+version = "0.5.0"
 authors = ["neptunepink <purpleposeidon@gmail.com>"]
 license = "MIT / Apache-2.0"
 description = "Basic text layout, using rusttype."

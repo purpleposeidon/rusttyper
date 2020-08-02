@@ -27,10 +27,10 @@ Nor can we handle LTR text!?
 "#;
 
 fn main() {
-    let mut events_loop = glutin::EventsLoop::new();
-    let window = glutin::WindowBuilder::new()
+    let events_loop = glutin::event_loop::EventLoop::new();
+    let window = glutin::window::WindowBuilder::new()
         .with_title("Rusttyper Example")
-        .with_dimensions(glutin::dpi::LogicalSize::new(512.0, 512.0));
+        .with_inner_size(glutin::dpi::LogicalSize::new(512.0, 512.0));
     let context = glutin::ContextBuilder::new()
         .with_vsync(true)
         .with_multisampling(8);
@@ -41,19 +41,31 @@ fn main() {
 
     let uidraw = rusttyper::simple2d::Simple2d::create(&display).unwrap();
     let mut count = 0usize;
-    loop {
-        count += 1;
+    events_loop.run(move |event, _window, flow| {
         let mut stop = false;
-        events_loop.poll_events(|event| {
-            use glutin::{Event, WindowEvent, KeyboardInput, VirtualKeyCode};
-            match event {
-                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => stop = true,
-                Event::WindowEvent { event: WindowEvent::Destroyed, .. } => stop = true,
-                Event::WindowEvent { event: WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode: Some(VirtualKeyCode::Escape), .. }, .. }, .. } => stop = true,
-                _ => {},
-            }
-        });
-        if stop { break; }
+        let mut draw = false;
+        use glutin::event::{Event, WindowEvent, KeyboardInput, VirtualKeyCode};
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => stop = true,
+            Event::WindowEvent { event: WindowEvent::Destroyed, .. } => stop = true,
+            Event::WindowEvent { event: WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode: Some(VirtualKeyCode::Escape), .. }, .. }, .. } => stop = true,
+            Event::RedrawRequested(_) => draw = true,
+            Event::NewEvents(_) => {
+                count += 1;
+                display.gl_window().window().request_redraw();
+                return;
+            },
+            _ => return,
+        }
+        if stop {
+            *flow = glutin::event_loop::ControlFlow::Exit;
+            return;
+        } else {
+            use std::time::*;
+            *flow = glutin::event_loop::ControlFlow::WaitUntil(Instant::now() + Duration::from_secs_f64(1.0 / 30.0));
+        }
+
+        if !draw { return; }
 
         let mut buffer = ::rusttyper::RunBuffer::new();
         {
@@ -96,6 +108,6 @@ fn main() {
         target.clear_color(1.0, 1.0, 1.0, 0.0);
         uidraw.draw(&display, &mut target, &mut font, &mut buffer).unwrap();
         target.finish().unwrap();
-    }
+    });
 }
 

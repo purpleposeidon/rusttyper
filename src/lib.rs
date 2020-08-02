@@ -28,7 +28,7 @@ pub struct Render<'a> {
 impl<'a> Render<'a> {
     /// texture_size: 512, tolerance: (0.1, 0.1)
     pub fn new(gl: &Display, texture_size: u32, tolerance: (f32, f32)) -> Self {
-        let dpi = gl.gl_window().window().get_hidpi_factor();
+        let dpi = gl.gl_window().window().scale_factor();
         // We can always just resize it if it's too small.
         let initial_size = (texture_size as f64 * dpi) as u32;
 

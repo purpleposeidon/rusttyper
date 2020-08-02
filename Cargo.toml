@@ -7,6 +7,6 @@ description = "Basic text layout, using rusttype."
 repository = "https://github.com/purpleposeidon/rusttyper"
 
 [dependencies]
-glium = "^0.25"
+glium = "^0.27"
 unicode-normalization = "^0.1.2"
 rusttype = { version = "0.7.6", features = ["gpu_cache"] }

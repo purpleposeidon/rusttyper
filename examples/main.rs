@@ -80,7 +80,7 @@ fn main() {
             let margin = 0.1;
             let input_field_width = (screen_width - 2.0 * margin * screen_width) as u32;
             let start = ((screen_width * margin) as i32, (screen_height * margin) as i32);
-            use rusttyper::{Style, Layout};
+            use rusttyper::{Style, TextBlock};
             let m = |n| (count * n % 255) as u8;
             let colorful = Style {
                 color: (m(5), m(16), m(32), 255),
@@ -95,7 +95,7 @@ fn main() {
                 .. Style::default()
             };
 
-            buffer.push_blocks(Layout {
+            buffer.push_blocks(TextBlock {
                 origin: start,
                 width: input_field_width,
             }, vec![
@@ -108,7 +108,7 @@ fn main() {
                 "?".into(),
                 (small, " (okay that might be too big)").into(),
             ].into_iter());
-            /*buffer.push_blocks(Layout {
+            /*buffer.push_blocks(TextBlock {
                 origin: start,
                 width: input_field_width,
             }, vec!["hey_guys".into()].into_iter());*/

@@ -1,3 +1,5 @@
+#![allow(clippy::nonminimal_bool)]
+
 #[macro_use]
 extern crate glium;
 extern crate unicode_normalization;
@@ -43,14 +45,15 @@ impl<'a> Render<'a> {
             ).unwrap(),
             cache: Cache::builder().build(),
             hidpi_factor: dpi, // FIXME: ask window + may need updating?
-            tolerance: tolerance,
+            tolerance,
         };
-        ret.set_cache(gl, initial_size as u32);
+        ret.set_cache(gl, initial_size);
         ret
     }
 
     pub fn add_fonts<B>(&mut self, bytes: B) -> Result<(), rusttype::Error>
-    where B: Into<SharedBytes<'a>>,
+    where
+        B: Into<SharedBytes<'a>>,
     {
         let fonts = FontCollection::from_bytes(bytes)?;
         for font in fonts.into_fonts() {
@@ -74,6 +77,7 @@ impl<'a> Render<'a> {
     }
 }
 
+/// A styled `str`.
 pub struct Text<'a> {
     pub style: Style,
     pub text: Cow<'a, str>,
@@ -89,7 +93,7 @@ where
         }
     }
 }
-// Can't do From<Cow>...
+// We can't just impl for S: Into<Cow> CUZ this conflicts with From<(Style, I)>
 impl<'a> From<String> for Text<'a> {
     fn from(t: String) -> Self {
         Text {
@@ -148,8 +152,13 @@ impl Style {
         Self::default()
     }
 
-    fn get_glyph<'context, 'fonts>(&self, c: char, fonts: &'context Vec<Font<'fonts>>) -> (usize, Glyph<'fonts>)
-        where 'fonts: 'context
+    fn get_glyph<'context, 'fonts>(
+        &self,
+        c: char,
+        fonts: &'context [Font<'fonts>],
+    ) -> (usize, Glyph<'fonts>)
+    where
+        'fonts: 'context,
     {
         // FIXME: Try fallback fonts.
         // FIXME: How do we figure out who the bold fonts are?
@@ -160,17 +169,19 @@ impl Style {
 }
 
 pub enum FlowControl {
-    Next,
-    Skip,
-    Stop,
+    NextGlyph,
+    SkipBlock,
+    StopBuild,
 }
 
+/// The bounds of text.
 #[derive(Debug, Clone)]
-pub struct Layout<P> {
+pub struct TextBlock<P> {
+    /// The upper-left corner.
     pub origin: P,
     pub width: u32,
 }
-impl<P> Layout<P> {
+impl<P> TextBlock<P> {
     fn to_block(&self) -> LayoutBlock {
         LayoutBlock {
             width: self.width,
@@ -212,7 +223,7 @@ impl LayoutBlock {
 #[derive(Default)]
 pub struct RunBuffer<'text, P> {
     parts: Vec<Text<'text>>,
-    blocks: Vec<(Range<usize>, Layout<P>)>,
+    blocks: Vec<(Range<usize>, TextBlock<P>)>,
     char_count: usize,
 }
 impl<'text, P> RunBuffer<'text, P>
@@ -227,8 +238,9 @@ where
         }
     }
 
-    pub fn push_blocks<I>(&mut self, layout: Layout<P>, it: I)
-    where I: Iterator<Item=Text<'text>>
+    pub fn push_blocks<I>(&mut self, layout: TextBlock<P>, it: I)
+    where
+        I: Iterator<Item=Text<'text>>,
     {
         let start = self.parts.len();
         for text in it {
@@ -239,19 +251,21 @@ where
         self.blocks.push((start..end, layout));
     }
 
-    pub fn push<T>(&mut self, layout: Layout<P>, t: T)
-    where T: Into<Text<'text>>
+    pub fn push<T>(&mut self, layout: TextBlock<P>, t: T)
+    where
+        T: Into<Text<'text>>,
     {
         self.push_blocks(layout, Some(t.into()).into_iter())
     }
 
     pub fn write<S>(&mut self, pos: P, width: u32, text: S)
-    where S: Into<Cow<'text, str>>
+    where
+        S: Into<Cow<'text, str>>,
     {
         self.push(
-            Layout {
+            TextBlock {
                 origin: pos,
-                width: width
+                width,
             },
             Text {
                 text: text.into(),
@@ -277,14 +291,14 @@ where
     }
 
     /// Runs the layout algorithm on the most recently added block, and returns the amount of space
-    /// used, and its `Layout` object.
-    pub fn measure_area<'fonts>(
+    /// used, and its `TextBlock` object.
+    pub fn measure_area(
         &mut self,
-        render: &'fonts mut Render,
+        render: &mut Render,
         query: Point<f32>,
     ) -> (
         Point<f32>,
-        &mut Layout<P>,
+        &mut TextBlock<P>,
         Option<QueryResult>,
     ) {
         let &mut(ref range, ref mut layout) = self.blocks.last_mut().expect("measure_area called but there were no blocks");
@@ -331,8 +345,8 @@ where
         F: for<'x, 'y> FnMut(&'x Text<'y>, &P, Rect<i32>, Rect<f32>) -> FlowControl,
     {
         let mut glyphs: Vec<(usize, PositionedGlyph)> = Vec::new();
-        let mut glyph_block: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
-        for &(ref range, ref layout) in &self.blocks {
+        let mut glyph_block: Vec<(&TextBlock<P>, &Text, Range<usize>)> = Vec::new();
+        for (range, layout) in &self.blocks {
             let mut layout_block = layout.to_block();
             for text in &self.parts[range.clone()] {
                 let start = glyphs.len();
@@ -372,9 +386,9 @@ where
             for &(fontid, ref glyph) in &glyphs[range] {
                 if let Ok(Some((uv, pos))) = render.cache.rect_for(fontid, glyph) {
                     match write_glyph(text, &layout.origin, pos, uv) {
-                        FlowControl::Next => (),
-                        FlowControl::Skip => break,
-                        FlowControl::Stop => return,
+                        FlowControl::NextGlyph => (),
+                        FlowControl::SkipBlock => break,
+                        FlowControl::StopBuild => return,
                     }
                 }
             }
@@ -385,7 +399,7 @@ fn layout_block_glyphs<'layout, 'context, 'fonts, 'result, 'text>(
     layout: &'layout mut LayoutBlock,
     result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
     dpi: f64,
-    fonts: &'context Vec<Font<'fonts>>,
+    fonts: &'context [Font<'fonts>],
     text: &'text Text<'text>,
     query: Point<f32>,
 ) -> (Point<f32>, Option<QueryResult>)
@@ -440,7 +454,7 @@ where
                     for &mut (_, ref mut g) in &mut result[layout.wrap_unit_start..] {
                         *g = g.clone().into_unpositioned().positioned(g.position() + delta);
                     }
-                    let ref last = result.last().expect("any glyphs").1;
+                    let last = &result.last().expect("any glyphs").1;
                     layout.caret = last.position();
                     layout.caret.x += last.unpositioned().h_metrics().advance_width;
                     // Word-wrapping may cause us to either LOSE or GAIN the query, but we only
@@ -484,7 +498,7 @@ where
         // FIXME: You might like to not push spaces, but they're load-bearing.
         layout.just_wrapped = false;
     }
-    let mut ret = layout.max_area.clone();
+    let mut ret = layout.max_area;
     ret.x = ret.x.max(layout.caret.x);
     (ret, query_result)
 }
@@ -587,36 +601,36 @@ pub mod simple2d {
                     Vertex {
                         position: [gl_rect_min.x, gl_rect_max.y],
                         tex_coords: [uv_rect.min.x, uv_rect.max.y],
-                        color: color
+                        color,
                     },
                     Vertex {
                         position: [gl_rect_min.x,  gl_rect_min.y],
                         tex_coords: [uv_rect.min.x, uv_rect.min.y],
-                        color: color
+                        color,
                     },
                     Vertex {
                         position: [gl_rect_max.x,  gl_rect_min.y],
                         tex_coords: [uv_rect.max.x, uv_rect.min.y],
-                        color: color
+                        color,
                     },
                     Vertex {
                         position: [gl_rect_max.x,  gl_rect_min.y],
                         tex_coords: [uv_rect.max.x, uv_rect.min.y],
-                        color: color
+                        color,
                     },
                     Vertex {
                         position: [gl_rect_max.x, gl_rect_max.y],
                         tex_coords: [uv_rect.max.x, uv_rect.max.y],
-                        color: color
+                        color,
                     },
                     Vertex {
                         position: [gl_rect_min.x, gl_rect_max.y],
                         tex_coords: [uv_rect.min.x, uv_rect.max.y],
-                        color: color
+                        color,
                     },
                 ];
                 vertices.extend_from_slice(&verts[..]);
-                FlowControl::Next
+                FlowControl::NextGlyph
             });
 
             let vbo = glium::VertexBuffer::new(gl, &vertices).unwrap();

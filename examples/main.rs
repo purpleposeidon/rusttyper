@@ -3,6 +3,7 @@ extern crate glium;
 
 use glium::{Surface};
 use glium::glutin;
+use rusttyper::{point, Point, Rect};
 
 static TEXT: &'static str = r#"Hello, world!
 
@@ -41,6 +42,7 @@ fn main() {
 
     let uidraw = rusttyper::simple2d::Simple2d::create(&display).unwrap();
     let mut count = 0usize;
+    let mut mouse = Point { x: 0.0, y: 0.0 };
     events_loop.run(move |event, _window, flow| {
         let mut stop = false;
         let mut draw = false;
@@ -49,6 +51,10 @@ fn main() {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => stop = true,
             Event::WindowEvent { event: WindowEvent::Destroyed, .. } => stop = true,
             Event::WindowEvent { event: WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode: Some(VirtualKeyCode::Escape), .. }, .. }, .. } => stop = true,
+            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
+                mouse.x = position.x as f32;
+                mouse.y = position.y as f32;
+            },
             Event::RedrawRequested(_) => draw = true,
             Event::NewEvents(_) => {
                 count += 1;
@@ -88,7 +94,8 @@ fn main() {
                 scale: 10.0,
                 .. Style::default()
             };
-            buffer.push_run(Layout {
+
+            buffer.push_blocks(Layout {
                 origin: start,
                 width: input_field_width,
             }, vec![
@@ -101,6 +108,42 @@ fn main() {
                 "?".into(),
                 (small, " (okay that might be too big)").into(),
             ].into_iter());
+            /*buffer.push_blocks(Layout {
+                origin: start,
+                width: input_field_width,
+            }, vec!["hey_guys".into()].into_iter());*/
+            {
+                let query = point(mouse.x - start.0 as f32, mouse.y - start.1 as f32);
+                let query = buffer.measure_area(&mut font, query);
+                if let Some(query) = query.2 {
+                    buffer.write((mouse.x as i32, mouse.y as i32), input_field_width, "@");
+                    let area = query.area;
+                    let area = Rect {
+                        min: point((area.min.x + start.0 as f32) as i32, (area.min.y + start.1 as f32) as i32),
+                        max: point((area.max.x + start.0 as f32) as i32, (area.max.y + start.1 as f32) as i32),
+                    };
+                    buffer.write((area.min.x, area.min.y), input_field_width, "@");
+                    buffer.write((area.max.x, area.max.y), input_field_width, "@");
+                    /*{
+                        let bit = buffer.parts.get(query.run_index)
+                            .map(|bit| -> &str { &*bit.text })
+                            .unwrap_or("<WRONG RUN>")
+                        ;
+                        let i = query.char_index;
+                        let lo = if i > 5 {
+                            i - 5
+                        } else {
+                            i
+                        };
+                        let hi = if i + 5 < bit.len() {
+                            i + 5
+                        } else {
+                            bit.len()
+                        };
+                        println!("{} {} {:?}  {:?}", query.run_index, query.char_index, bit.get(query.char_index..query.char_index+1).unwrap_or("><"), &bit.get(lo..hi).unwrap_or("><"));
+                    }*/
+                }
+            }
             buffer.write((0, screen_height as i32), input_field_width, format!("{}", count));
         }
 

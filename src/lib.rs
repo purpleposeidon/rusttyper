@@ -175,21 +175,31 @@ impl<P> Layout<P> {
         LayoutBlock {
             width: self.width,
             caret: point(0.0, 0.0),
-            unit_start: 0,
+            wrap_unit_start: 0,
             any_break: false,
             max_area: point(0.0, 0.0),
             last_glyph_id: None,
+            query_area: Rect {
+                min: point(0.0, 0.0),
+                max: point(0.0, 0.0),
+            },
+            query_hit: false,
+            just_wrapped: false,
         }
     }
 }
 
+#[derive(Debug)]
 struct LayoutBlock {
     width: u32,
     caret: Point<f32>,
-    unit_start: usize,
+    wrap_unit_start: usize,
     any_break: bool,
     max_area: Point<f32>,
     last_glyph_id: Option<GlyphId>,
+    query_area: Rect<f32>,
+    query_hit: bool,
+    just_wrapped: bool,
 }
 impl LayoutBlock {
     fn bump_line(&mut self, advance_height: f32) {
@@ -202,7 +212,7 @@ impl LayoutBlock {
 #[derive(Default)]
 pub struct RunBuffer<'text, P> {
     parts: Vec<Text<'text>>,
-    runs: Vec<(Range<usize>, Layout<P>)>,
+    blocks: Vec<(Range<usize>, Layout<P>)>,
     char_count: usize,
 }
 impl<'text, P> RunBuffer<'text, P>
@@ -212,12 +222,12 @@ where
     pub fn new() -> Self {
         RunBuffer {
             parts: Vec::new(),
-            runs: Vec::new(),
+            blocks: Vec::new(),
             char_count: 0,
         }
     }
 
-    pub fn push_run<I>(&mut self, layout: Layout<P>, it: I)
+    pub fn push_blocks<I>(&mut self, layout: Layout<P>, it: I)
     where I: Iterator<Item=Text<'text>>
     {
         let start = self.parts.len();
@@ -226,13 +236,13 @@ where
             self.parts.push(text);
         }
         let end = self.parts.len();
-        self.runs.push((start..end, layout));
+        self.blocks.push((start..end, layout));
     }
 
     pub fn push<T>(&mut self, layout: Layout<P>, t: T)
     where T: Into<Text<'text>>
     {
-        self.push_run(layout, Some(t.into()).into_iter())
+        self.push_blocks(layout, Some(t.into()).into_iter())
     }
 
     pub fn write<S>(&mut self, pos: P, width: u32, text: S)
@@ -252,7 +262,7 @@ where
 
     pub fn reset(&mut self) {
         self.parts.clear();
-        self.runs.clear();
+        self.blocks.clear();
         self.char_count = 0;
     }
 
@@ -262,26 +272,44 @@ where
         self.char_count
     }
 
-    /// Runs the layout algorithm on the most recently added run, and returns the amount of space
+    pub fn parts(&self) -> &[Text<'text>] {
+        &self.parts[..]
+    }
+
+    /// Runs the layout algorithm on the most recently added block, and returns the amount of space
     /// used, and its `Layout` object.
-    pub fn measure_area<'fonts>(&mut self, render: &'fonts mut Render) -> (Point<f32>, &mut Layout<P>) {
-        let &mut(ref range, ref mut layout) = self.runs.last_mut().expect("measure_area called but there were no runs");
+    pub fn measure_area<'fonts>(
+        &mut self,
+        render: &'fonts mut Render,
+        query: Point<f32>,
+    ) -> (
+        Point<f32>,
+        &mut Layout<P>,
+        Option<QueryResult>,
+    ) {
+        let &mut(ref range, ref mut layout) = self.blocks.last_mut().expect("measure_area called but there were no blocks");
         let mut layout_block = layout.to_block();
         let mut glyphs = Vec::new();
         let mut max_area = point(0.0, 0.0);
-        for text in &self.parts[range.clone()] {
-            let nm = layout_paragraph(
+        let mut qr = None;
+        for (part_index, text) in self.parts[range.clone()].iter().enumerate() {
+            let (nm, q) = layout_block_glyphs(
                 &mut layout_block,
                 &mut glyphs,
                 render.hidpi_factor,
                 &render.fonts,
                 text,
+                query,
             );
+            if let (None, Some(mut q)) = (&qr, q) {
+                q.part_index = part_index;
+                qr = Some(q);
+            }
             if nm.x > max_area.x { max_area.x = nm.x; }
             if nm.y > max_area.y { max_area.y = nm.y; }
         }
         layout_block.bump_line(0.0);
-        (max_area, layout)
+        (max_area, layout, qr)
     }
 
     /// Runs the layout algorithm, and uploads glyphs to the cache.
@@ -303,20 +331,21 @@ where
         F: for<'x, 'y> FnMut(&'x Text<'y>, &P, Rect<i32>, Rect<f32>) -> FlowControl,
     {
         let mut glyphs: Vec<(usize, PositionedGlyph)> = Vec::new();
-        let mut glyph_run: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
-        for &(ref range, ref layout) in &self.runs {
+        let mut glyph_block: Vec<(&Layout<P>, &Text, Range<usize>)> = Vec::new();
+        for &(ref range, ref layout) in &self.blocks {
             let mut layout_block = layout.to_block();
             for text in &self.parts[range.clone()] {
                 let start = glyphs.len();
-                layout_paragraph(
+                layout_block_glyphs(
                     &mut layout_block,
                     &mut glyphs,
                     render.hidpi_factor,
                     &render.fonts,
                     text,
+                    point(-9e9, -9e9),
                 );
                 let end = glyphs.len();
-                glyph_run.push((layout, text, start..end));
+                glyph_block.push((layout, text, start..end));
             }
         }
         for &(fontid, ref glyph) in &glyphs {
@@ -339,7 +368,7 @@ where
                 format: glium::texture::ClientFormat::U8,
             });
         }).unwrap();
-        for (layout, text, range) in glyph_run {
+        for (layout, text, range) in glyph_block {
             for &(fontid, ref glyph) in &glyphs[range] {
                 if let Ok(Some((uv, pos))) = render.cache.rect_for(fontid, glyph) {
                     match write_glyph(text, &layout.origin, pos, uv) {
@@ -352,68 +381,126 @@ where
         }
     }
 }
-fn layout_paragraph<'layout, 'context, 'fonts, 'result, 'text>(
+fn layout_block_glyphs<'layout, 'context, 'fonts, 'result, 'text>(
     layout: &'layout mut LayoutBlock,
     result: &'result mut Vec<(usize, PositionedGlyph<'fonts>)>,
     dpi: f64,
     fonts: &'context Vec<Font<'fonts>>,
     text: &'text Text<'text>,
-) -> Point<f32>
+    query: Point<f32>,
+) -> (Point<f32>, Option<QueryResult>)
 where
     'fonts: 'context,
 {
+    let mut query_result = None;
     let style = &text.style;
     let scale = Scale::uniform((text.style.scale as f64 * dpi) as f32);
-    let v_metrics = fonts[0].v_metrics(scale);
+    let v_metrics = fonts[0].v_metrics(scale); // FIXME: Various problems.
     let advance_height: f32 = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap; // FIXME: max(this line)?
     let is_separator = |c: char| c == ' ';
-    for c in text.text.nfc() {
+    let caret2rect = |caret: Point<f32>| -> Rect<f32> {
+        let min = caret - vector(0.0, v_metrics.ascent);
+        let max = caret; // Tails on j's and g's shouldn't count, I think. - vector(0.0, v_metrics.descent);
+        Rect { min, max }
+    };
+    layout.query_area = caret2rect(layout.caret);
+    for (nfc_char_index, c) in text.text.nfc().enumerate() {
         if c.is_control() {
             if c == '\n' {
                 layout.bump_line(advance_height);
-                layout.unit_start = result.len();
+                layout.query_area = caret2rect(layout.caret);
+                layout.wrap_unit_start = result.len();
                 layout.any_break = false;
+                layout.query_hit = false;
             }
             continue;
         }
         if is_separator(c) {
-            layout.unit_start = result.len() + 1; // We break at the *next* character
+            layout.wrap_unit_start = result.len() + 1; // We break at the *next* character
             layout.any_break = true;
+            layout.query_hit = false;
+            layout.query_area = caret2rect(layout.caret);
         }
         let (fontid, base_glyph) = style.get_glyph(c, fonts);
         let font = &fonts[fontid];
-        if let Some(id) = layout.last_glyph_id.take() {
-            layout.caret.x += font.pair_kerning(scale, id, base_glyph.id());
+        if !layout.just_wrapped {
+            if let Some(id) = layout.last_glyph_id.replace(base_glyph.id()) {
+                layout.caret.x += font.pair_kerning(scale, id, base_glyph.id()); // FIXME: Not after a wrap.
+            }
         }
-        layout.last_glyph_id = Some(base_glyph.id());
         let mut glyph: PositionedGlyph = base_glyph.scaled(scale).positioned(layout.caret);
-        if let Some(bb) = glyph.pixel_bounding_box() {
+        let bb = glyph.pixel_bounding_box();
+        if let Some(bb) = bb {
             if bb.max.x as i64 > layout.width as i64 {
                 layout.bump_line(advance_height);
-                if result.len() > layout.unit_start && layout.any_break {
+                if result.len() > layout.wrap_unit_start && layout.any_break {
                     // There's probably some weird degenerate case where this'd panic w/o this
                     // check.
-                    let delta = layout.caret - result[layout.unit_start].1.position();
-                    for &mut (_, ref mut g) in &mut result[layout.unit_start..] {
+                    let delta = layout.caret - result[layout.wrap_unit_start].1.position();
+                    for &mut (_, ref mut g) in &mut result[layout.wrap_unit_start..] {
                         *g = g.clone().into_unpositioned().positioned(g.position() + delta);
                     }
                     let ref last = result.last().expect("any glyphs").1;
                     layout.caret = last.position();
                     layout.caret.x += last.unpositioned().h_metrics().advance_width;
-                    layout.any_break = false;
+                    // Word-wrapping may cause us to either LOSE or GAIN the query, but we only
+                    // need to check LOSE because a GAIN will natively re-check.
+                    layout.query_area.min = layout.query_area.min + delta;
+                    layout.query_area.max = layout.query_area.max + delta;
+                } else {
+                    // If there were glyphs, then everything must get shoved down.
+                    // But if there were no glyphs, we still need to reset the query_area.
+                    layout.query_area = caret2rect(layout.caret);
                 }
+                if layout.query_hit {
+                    layout.query_hit = false;
+                    query_result = None;
+                }
+                layout.any_break = false;
                 glyph = glyph.into_unpositioned().positioned(layout.caret);
                 layout.last_glyph_id = None;
+                layout.just_wrapped = true;
             }
         }
-        layout.caret.x += glyph.unpositioned().h_metrics().advance_width;
+        let metrics = glyph.unpositioned().h_metrics();
+        layout.caret.x += metrics.advance_width;
+        layout.query_area.max.x = layout.caret.x;
+        if true
+            && query_result.is_none()
+            && (layout.query_area.min.x <= query.x && query.x <= layout.query_area.max.x)
+            && (layout.query_area.min.y <= query.y && query.y <= layout.query_area.max.y)
+            && layout.query_area.min.x != layout.query_area.max.x
+        {
+            layout.query_hit = true;
+            query_result = Some(QueryResult {
+                part_index: !0, // NOTE: Fixed later.
+                nfc_char_index,
+                area: layout.query_area,
+            });
+        } else if let (Some(qr), true) = (&mut query_result, layout.query_hit)  {
+            qr.area.max.x = qr.area.max.x.max(layout.caret.x);
+        }
         result.push((fontid, glyph));
+        // FIXME: You might like to not push spaces, but they're load-bearing.
+        layout.just_wrapped = false;
     }
     let mut ret = layout.max_area.clone();
     ret.x = ret.x.max(layout.caret.x);
-    ret
+    (ret, query_result)
 }
 
+#[derive(Debug, Clone)]
+pub struct QueryResult {
+    /// The text-part that the query found.
+    pub part_index: usize,
+    /// The character in the block found. **NOTE**: This is possibly not what you'd expect, since it
+    /// is the index in the `str.nfc()` stream. Normalize your strings first.
+    // Sorry, there doesn't seem to be any easy fix for this.
+    pub nfc_char_index: usize,
+    /// The area, on-screen, of the broken word that has been selected.
+    /// Only useful for debugging.
+    pub area: Rect<f32>,
+}
 
 pub mod simple2d {
     use super::*;

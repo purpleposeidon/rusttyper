@@ -83,7 +83,7 @@ fn main() {
             use rusttyper::{Style, TextBlock};
             let m = |n| (count * n % 255) as u8;
             let colorful = Style {
-                color: (m(5), m(16), m(32), 255),
+                color: [m(5), m(16), m(32), 255],
                 .. Style::default()
             };
             let big = Style {

@@ -116,12 +116,12 @@ pub struct Style {
     /// The size of the font. The default scale is 24.0.
     pub scale: f32,
     /// RGBA color components, from 0 to 255.
-    pub color: (u8, u8, u8, u8),
+    pub color: [u8; 4],
     /// NYI
     pub fontid: usize,
 
     /// Mark the text for drawing with shadows. This is not implemented here.
-    pub shadow: Option<(u8, u8, u8, u8)>,
+    pub shadow: Option<[u8; 4]>,
     // FIXME: bitflags
     /// NYI
     pub bold: bool,
@@ -136,7 +136,7 @@ impl Default for Style {
     fn default() -> Self {
         Style {
             scale: 24.0,
-            color: (0, 0, 0, 0xFF),
+            color: [0, 0, 0, 0xFF],
             fontid: 0,
 
             shadow: None,
@@ -584,7 +584,7 @@ pub mod simple2d {
                 let color = {
                     let c = text.style.color;
                     let f = |c| c as f32 / 255.0;
-                    [f(c.0), f(c.1), f(c.2), f(c.3)]
+                    [f(c[0]), f(c[1]), f(c[2]), f(c[3])]
                 };
                 let origin = vector(origin.0, origin.1);
                 let (gl_rect_min, gl_rect_max) = (
